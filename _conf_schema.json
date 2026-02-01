@@ -1,0 +1,108 @@
+{
+  "server_url": {
+    "description": "Grok API服务器地址",
+    "type": "string",
+    "hint": "输入服务器地址，例如：https://api.x.ai（会自动补全/v1/chat/completions）",
+    "default": "https://api.x.ai"
+  },
+  "model_id": {
+    "description": "模型ID",
+    "type": "string",
+    "hint": "输入模型ID，例如：grok-imagine-0.9",
+    "default": "grok-imagine-0.9"
+  },
+  "api_key": {
+    "description": "API密钥",
+    "type": "string",
+    "hint": "输入您的Grok API密钥",
+    "default": ""
+  },
+  "prompt_prefix": {
+    "description": "提示词前缀（用于强调基于原图编辑）",
+    "type": "string",
+    "hint": "会自动拼到用户提示词前面，可留空关闭",
+    "default": "请基于所附图片进行编辑，不要生成全新图像。尽量保持主体、构图、视角和背景不变，只做提示词要求的修改。"
+  },
+  "status_message_mode": {
+    "description": "提示消息模式",
+    "type": "string",
+    "options": ["verbose", "minimal", "silent"],
+    "hint": "verbose: 发送完整提示消息; minimal: 仅发送开始提示; silent: 不发送开始提示",
+    "default": "minimal"
+  },
+  "enabled": {
+    "description": "启用图片编辑功能",
+    "type": "bool",
+    "default": true
+  },
+  "timeout_seconds": {
+    "description": "请求超时时间（秒）",
+    "type": "int",
+    "hint": "API请求的超时时间，建议60-180秒",
+    "default": 120
+  },
+  "max_retry_attempts": {
+    "description": "最大重试次数",
+    "type": "int",
+    "hint": "API请求失败时的最大重试次数",
+    "default": 3
+  },
+  "admin_users": {
+    "description": "管理员用户ID列表（可以使用测试命令）",
+    "type": "list",
+    "default": []
+  },
+  "group_control_mode": {
+    "description": "群组控制模式",
+    "type": "string",
+    "options": ["off", "whitelist", "blacklist"],
+    "hint": "off: 不限制, whitelist: 仅白名单群组可用, blacklist: 黑名单群组不可用",
+    "default": "off"
+  },
+  "group_list": {
+    "description": "群组ID列表（白名单或黑名单）",
+    "type": "list",
+    "default": []
+  },
+  "rate_limit_enabled": {
+    "description": "启用速率限制",
+    "type": "bool",
+    "default": true
+  },
+  "rate_limit_window_seconds": {
+    "description": "速率限制时间窗口（秒）",
+    "type": "int",
+    "hint": "在此时间窗口内限制调用次数",
+    "default": 3600
+  },
+  "rate_limit_max_calls": {
+    "description": "速率限制最大调用次数",
+    "type": "int",
+    "hint": "在时间窗口内允许的最大调用次数",
+    "default": 5
+  },
+  "max_images_per_response": {
+    "description": "单次最多返回图片数量",
+    "type": "int",
+    "hint": "限制每次返回的图片数量，避免刷屏",
+    "default": 4
+  },
+  "save_image_enabled": {
+    "description": "保留编辑后的图片文件",
+    "type": "bool",
+    "hint": "true 表示发送后保留图片；false 表示成功发送后自动清理缓存",
+    "default": false
+  },
+  "nap_server_address": {
+    "description": "NapCat 文件服务器地址",
+    "type": "string",
+    "hint": "可选：配置 NapCat 文件中转服务的地址",
+    "default": ""
+  },
+  "nap_server_port": {
+    "description": "NapCat 文件服务器端口",
+    "type": "int",
+    "hint": "可选：配置 NapCat 文件中转服务端口",
+    "default": 0
+  }
+}

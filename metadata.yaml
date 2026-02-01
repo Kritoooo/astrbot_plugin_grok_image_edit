@@ -1,0 +1,9 @@
+name: astrbot_plugin_grok_image_edit
+description: 基于grok2api的图片编辑插件
+version: 1.0.0
+author: ShiHao
+repo: https://github.com/lixin0229/astrbot_plugin_grok_video
+plugin_type: platform
+entry: main.py
+requirements:
+  - httpx>=0.24.0
