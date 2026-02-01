@@ -37,6 +37,10 @@ Grok2api 搭建教程：https://github.com/chenyme/grok2api
 - **max_retry_attempts**: 最大重试次数（默认：3 次）
 - **prompt_prefix**: 提示词前缀（用于强调基于原图编辑，可留空关闭）
 - **status_message_mode**: 提示消息模式（verbose/minimal/silent，默认：minimal）
+- **log_input_image_meta**: 记录输入图片元信息（默认：true）
+- **auto_compress_enabled**: 首次失败后自动压缩为 JPEG 兜底（默认：true）
+- **auto_compress_max_side**: 自动压缩最大边长（默认：1536）
+- **auto_compress_quality**: JPEG 压缩质量（默认：85）
 - **group_control_mode**: 群组控制模式（off/whitelist/blacklist）
 - **group_list**: 群组白名单/黑名单列表
 - **rate_limit_enabled**: 启用速率限制（默认：true）
@@ -89,6 +93,7 @@ Grok2api 搭建教程：https://github.com/chenyme/grok2api
 ## 依赖要求
 
 - httpx >= 0.24.0
+- Pillow >= 10.0.0（用于图片元信息与自动压缩）
 
 ## 版本信息
 

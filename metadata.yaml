@@ -7,3 +7,4 @@ plugin_type: platform
 entry: main.py
 requirements:
   - httpx>=0.24.0
+  - Pillow>=10.0.0

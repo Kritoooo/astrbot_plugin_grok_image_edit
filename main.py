@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import io
 import json
 import re
 import sys
@@ -29,6 +30,11 @@ except ImportError:
         send_file = None
         logger.warning("NapCat 文件转发模块未找到，将跳过 NapCat 中转功能")
 
+try:
+    from PIL import Image as PILImage
+except Exception:
+    PILImage = None
+
 
 @register("grok-image-edit", "Claude", "Grok图片编辑插件，支持根据图片和提示词编辑图片", "1.0.0")
 class GrokImageEditPlugin(Star):
@@ -50,6 +56,17 @@ class GrokImageEditPlugin(Star):
         self.status_message_mode = str(config.get("status_message_mode", "minimal")).strip().lower()
         if self.status_message_mode not in {"verbose", "minimal", "silent"}:
             self.status_message_mode = "minimal"
+        self.log_input_image_meta = bool(config.get("log_input_image_meta", True))
+        self.auto_compress_enabled = bool(config.get("auto_compress_enabled", True))
+        self.auto_compress_max_side = int(config.get("auto_compress_max_side", 1536))
+        self.auto_compress_quality = int(config.get("auto_compress_quality", 85))
+        self._pil_warned = False
+        if self.auto_compress_max_side <= 0:
+            self.auto_compress_max_side = 1536
+        if self.auto_compress_quality < 30:
+            self.auto_compress_quality = 30
+        if self.auto_compress_quality > 95:
+            self.auto_compress_quality = 95
 
         # 请求配置
         self.timeout_seconds = config.get("timeout_seconds", 120)
@@ -370,7 +387,125 @@ class GrokImageEditPlugin(Star):
             logger.warning(f"下载引用图片失败: {e}")
             return None
 
-    async def _call_grok_api(self, prompt: str, image_base64: str) -> Tuple[List[str], List[str], Optional[str]]:
+    def _parse_data_url(self, data_url: str) -> Tuple[Optional[str], Optional[str]]:
+        if not isinstance(data_url, str) or not data_url:
+            return None, None
+        match = re.match(r"data:([^;]+);base64,(.+)", data_url, re.DOTALL)
+        if match:
+            return match.group(1).lower(), match.group(2)
+        if data_url.startswith("data:"):
+            return None, None
+        return None, data_url
+
+    def _format_image_meta(self, meta: Optional[dict]) -> str:
+        if not meta:
+            return ""
+        parts: List[str] = []
+        orig_format = meta.get("orig_format")
+        orig_size = meta.get("orig_size")
+        orig_bytes = meta.get("orig_bytes")
+        orig_mime = meta.get("orig_mime")
+        if orig_format or orig_size or orig_bytes or orig_mime:
+            parts.append(
+                f"orig={orig_format or '-'} {orig_size or '-'} {orig_bytes or '-'}B {orig_mime or '-'}"
+            )
+        if meta.get("compressed"):
+            parts.append(
+                "new=JPEG "
+                f"{meta.get('new_size', '-')}"
+                f" {meta.get('new_bytes', '-')}B"
+                f" q={meta.get('jpeg_quality', '-')}"
+                f" resized={meta.get('resized', '-')}"
+            )
+        return " | ".join(parts)
+
+    def _compress_image_bytes(self, image_bytes: bytes) -> Tuple[Optional[bytes], dict]:
+        meta: dict = {"compressed": False}
+        if PILImage is None:
+            return None, meta
+        try:
+            with PILImage.open(io.BytesIO(image_bytes)) as img:
+                meta["orig_format"] = img.format
+                meta["orig_mode"] = img.mode
+                meta["orig_size"] = f"{img.width}x{img.height}"
+
+                max_side = int(self.auto_compress_max_side)
+                resized = False
+                if max_side > 0:
+                    max_dim = max(img.width, img.height)
+                    if max_dim > max_side:
+                        ratio = max_side / max_dim
+                        new_w = max(1, int(img.width * ratio))
+                        new_h = max(1, int(img.height * ratio))
+                        img = img.resize((new_w, new_h), PILImage.LANCZOS)
+                        resized = True
+
+                if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                    alpha = img.convert("RGBA")
+                    bg = PILImage.new("RGB", alpha.size, (255, 255, 255))
+                    bg.paste(alpha, mask=alpha.split()[-1])
+                    img = bg
+                else:
+                    img = img.convert("RGB")
+
+                buffer = io.BytesIO()
+                img.save(
+                    buffer,
+                    format="JPEG",
+                    quality=self.auto_compress_quality,
+                    optimize=True,
+                )
+                new_bytes = buffer.getvalue()
+                meta["compressed"] = True
+                meta["jpeg_quality"] = self.auto_compress_quality
+                meta["new_bytes"] = len(new_bytes)
+                meta["new_size"] = f"{img.width}x{img.height}"
+                meta["resized"] = resized
+                return new_bytes, meta
+        except Exception as e:
+            logger.warning(f"图片压缩失败: {e}")
+            return None, meta
+
+    def _prepare_input_image(self, image_data_url: str, *, compress: bool) -> Tuple[str, Optional[dict]]:
+        mime, b64_data = self._parse_data_url(image_data_url)
+        if not b64_data:
+            return image_data_url, None
+
+        try:
+            image_bytes = base64.b64decode(b64_data, validate=True)
+        except Exception as e:
+            logger.warning(f"输入图片base64解析失败: {e}")
+            return image_data_url, None
+
+        meta: dict = {
+            "orig_mime": mime or "image/jpeg",
+            "orig_bytes": len(image_bytes),
+        }
+
+        if PILImage is not None:
+            try:
+                with PILImage.open(io.BytesIO(image_bytes)) as img:
+                    meta["orig_format"] = img.format
+                    meta["orig_size"] = f"{img.width}x{img.height}"
+                    meta["orig_mode"] = img.mode
+            except Exception as e:
+                logger.warning(f"读取输入图片信息失败: {e}")
+        elif self.auto_compress_enabled and not self._pil_warned:
+            self._pil_warned = True
+            logger.warning("Pillow 未安装，无法读取图片元信息或执行自动压缩")
+
+        if compress and PILImage is not None:
+            new_bytes, compress_meta = self._compress_image_bytes(image_bytes)
+            if new_bytes:
+                meta.update(compress_meta)
+                new_b64 = base64.b64encode(new_bytes).decode()
+                return f"data:image/jpeg;base64,{new_b64}", meta
+
+        return image_data_url, meta
+
+    async def _call_grok_api(
+        self, prompt: str, image_base64: str, image_meta: Optional[dict] = None
+    ) -> Tuple[List[str], List[str], Optional[str]]:
         """调用 Grok API 进行图片编辑"""
         if not self.api_key:
             return [], [], "未配置API密钥"
@@ -404,11 +539,20 @@ class GrokImageEditPlugin(Star):
             pool=self.timeout_seconds + 10,
         )
 
+        current_image = image_base64
+        current_meta = image_meta
+        fallback_prepared = False
+
         for attempt in range(self.max_retry_attempts):
             try:
+                if self.log_input_image_meta and current_meta:
+                    logger.info(f"Grok输入图片信息: {self._format_image_meta(current_meta)}")
+
                 logger.info(f"调用Grok API (尝试 {attempt + 1}/{self.max_retry_attempts})")
                 logger.debug(f"请求URL: {self.api_url}")
                 logger.debug(f"请求模型: {self.model_id}")
+
+                payload["messages"][0]["content"][1]["image_url"]["url"] = current_image
 
                 async with httpx.AsyncClient(timeout=timeout_config) as client:
                     response = await client.post(self.api_url, json=payload, headers=headers)
@@ -436,17 +580,63 @@ class GrokImageEditPlugin(Star):
                     return [], [], "API访问被拒绝，请检查密钥和权限"
 
                 error_msg = f"API请求失败 (状态码: {response.status_code})"
+                error_type = None
+                error_code = None
+                error_message = None
+                response_preview = response_text[:400].replace("\n", " ").replace("\r", " ")
+                content_type = response.headers.get("content-type", "")
+                request_id = response.headers.get("x-request-id") or response.headers.get("x-request-id".lower(), "")
                 try:
                     error_detail = response.json()
                     logger.debug(f"错误详情JSON: {error_detail}")
-                    if "error" in error_detail:
-                        error_msg += f": {error_detail['error']}"
-                    elif "message" in error_detail:
-                        error_msg += f": {error_detail['message']}"
+                    if isinstance(error_detail, dict):
+                        if "error" in error_detail:
+                            error_msg += f": {error_detail['error']}"
+                        elif "message" in error_detail:
+                            error_msg += f": {error_detail['message']}"
+                        else:
+                            error_msg += f": {error_detail}"
+                        error_type = error_detail.get("type")
+                        error_code = error_detail.get("code")
+                        error_message = error_detail.get("message")
                     else:
                         error_msg += f": {error_detail}"
                 except Exception:
                     error_msg += f": {response_text[:200]}"
+
+                logger.warning(
+                    "API请求失败详情: "
+                    f"status={response.status_code} "
+                    f"type={error_type} code={error_code} "
+                    f"message_preview={str(error_message)[:200] if error_message else ''} "
+                    f"content_type={content_type} response_len={len(response_text)} "
+                    f"request_id={request_id} "
+                    f"input_meta={self._format_image_meta(current_meta)}"
+                )
+                logger.debug("API响应原文预览: " f"{response_preview}")
+
+                if (
+                    self.auto_compress_enabled
+                    and not fallback_prepared
+                    and attempt == 0
+                    and self.max_retry_attempts > 1
+                ):
+                    fallback_prepared = True
+                    if PILImage is None:
+                        if not self._pil_warned:
+                            self._pil_warned = True
+                            logger.warning("Pillow 未安装，无法在失败后进行 JPEG 压缩兜底")
+                    else:
+                        compressed_image, compressed_meta = self._prepare_input_image(
+                            image_base64, compress=True
+                        )
+                        if compressed_image != current_image:
+                            current_image = compressed_image
+                            current_meta = compressed_meta
+                            logger.warning(
+                                "首次失败后启用 JPEG 压缩兜底: "
+                                f"{self._format_image_meta(current_meta)}"
+                            )
 
                 if attempt == self.max_retry_attempts - 1:
                     return [], [], error_msg
@@ -708,7 +898,10 @@ class GrokImageEditPlugin(Star):
             return [], [], "未找到图片，请在消息中包含图片或引用包含图片的消息"
 
         image_base64 = images[0]
-        image_urls, data_urls, error_msg = await self._call_grok_api(prompt, image_base64)
+        prepared_image, image_meta = self._prepare_input_image(image_base64, compress=False)
+        image_urls, data_urls, error_msg = await self._call_grok_api(
+            prompt, prepared_image, image_meta=image_meta
+        )
         if error_msg:
             return [], [], error_msg
 
@@ -729,6 +922,7 @@ class GrokImageEditPlugin(Star):
         prefetched_error: Optional[str] = None,
     ):
         user_id = str(event.get_sender_id())
+        send_manifest: List[dict] = []
         try:
             logger.info(f"开始处理用户 {user_id} 的图片编辑任务: {task_id}")
 
@@ -754,6 +948,7 @@ class GrokImageEditPlugin(Star):
                 if count >= self.max_images_per_response:
                     break
                 components.append(Image.fromURL(image_url))
+                send_manifest.append({"type": "url", "source": image_url, "send": image_url})
                 count += 1
 
             for image_path in image_paths:
@@ -761,15 +956,28 @@ class GrokImageEditPlugin(Star):
                     break
                 prepared_path = await self._prepare_image_path(image_path)
                 components.append(Image.fromFileSystem(path=prepared_path))
+                send_manifest.append({"type": "file", "source": image_path, "send": prepared_path})
                 count += 1
 
             if components:
                 try:
+                    logger.debug(
+                        "图片发送列表: "
+                        f"{self._format_send_manifest(send_manifest)}; "
+                        f"total_urls={len(image_urls)} total_paths={len(image_paths)} "
+                        f"send_count={len(send_manifest)}"
+                    )
                     await asyncio.wait_for(event.send(event.chain_result(components)), timeout=60.0)
                     if self.status_message_mode == "verbose":
                         await event.send(event.plain_result("✅ 图片发送成功！"))
                 except asyncio.TimeoutError:
                     logger.warning(f"用户 {user_id} 的图片发送超时，但可能仍在传输")
+                    logger.warning(
+                        "图片发送超时明细: "
+                        f"{self._format_send_manifest(send_manifest)}; "
+                        f"total_urls={len(image_urls)} total_paths={len(image_paths)} "
+                        f"send_count={len(send_manifest)}"
+                    )
                     if self.status_message_mode == "verbose":
                         await event.send(
                             event.plain_result(
@@ -783,6 +991,12 @@ class GrokImageEditPlugin(Star):
 
         except Exception as e:
             logger.error(f"用户 {user_id} 的图片编辑异常: {e}")
+            if send_manifest:
+                logger.error(
+                    "图片发送异常明细: "
+                    f"{self._format_send_manifest(send_manifest)}; "
+                    f"send_count={len(send_manifest)}"
+                )
             await event.send(event.plain_result(f"❌ 图片编辑时遇到问题: {str(e)}"))
 
         finally:
@@ -883,3 +1097,14 @@ class GrokImageEditPlugin(Star):
     async def terminate(self):
         self._rate_limit_locks.clear()
         logger.info("Grok图片编辑插件已卸载")
+
+    def _format_send_manifest(self, manifest: List[dict]) -> str:
+        if not manifest:
+            return "[]"
+        parts: List[str] = []
+        for idx, item in enumerate(manifest, 1):
+            item_type = item.get("type", "?")
+            source = item.get("source", "")
+            send = item.get("send", "")
+            parts.append(f"{idx}:{item_type} source={source} send={send}")
+        return "; ".join(parts)

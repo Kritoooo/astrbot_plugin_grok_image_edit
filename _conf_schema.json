@@ -30,6 +30,30 @@
     "hint": "verbose: 发送完整提示消息; minimal: 仅发送开始提示; silent: 不发送开始提示",
     "default": "minimal"
   },
+  "log_input_image_meta": {
+    "description": "记录输入图片元信息",
+    "type": "bool",
+    "hint": "true 时会记录图片格式、尺寸、大小等信息，便于排查上传失败",
+    "default": true
+  },
+  "auto_compress_enabled": {
+    "description": "自动压缩为 JPEG",
+    "type": "bool",
+    "hint": "true 时在首次失败后启用 JPEG 压缩兜底并可缩放尺寸",
+    "default": true
+  },
+  "auto_compress_max_side": {
+    "description": "自动压缩最大边长",
+    "type": "int",
+    "hint": "压缩时会将最长边缩放到此值以内（像素）",
+    "default": 1536
+  },
+  "auto_compress_quality": {
+    "description": "JPEG 压缩质量",
+    "type": "int",
+    "hint": "JPEG 压缩质量（30-95）",
+    "default": 85
+  },
   "enabled": {
     "description": "启用图片编辑功能",
     "type": "bool",
